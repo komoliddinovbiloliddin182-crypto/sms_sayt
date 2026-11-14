@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tezkor SMS Chat</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: Arial, sans-serif; }
+        body { background-color: #f0f2f5; height: 100vh; display: flex; justify-content: center; align-items: center; }
+        
+        #login-screen { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); text-align: center; width: 90%; max-width: 340px; }
+        #login-screen h2 { margin-bottom: 15px; color: #333; }
+        #login-screen input { width: 100%; padding: 12px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 5px; font-size: 16px; }
+        #login-screen button { width: 100%; padding: 12px; background: #0088cc; color: white; border: none; border-radius: 5px; font-size: 16px; cursor: pointer; font-weight: bold; }
+        #login-screen button:hover { background: #006699; }
+
+        #chat-screen { display: none; width: 95%; max-width: 850px; height: 85vh; background: white; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); overflow: hidden; }
+        
+        .sidebar { width: 32%; background: #2c3e50; color: white; display: flex; flex-direction: column; }
+        .sidebar-header { padding: 15px; background: #1a252f; font-weight: bold; font-size: 16px; }
+        #users-list { list-style: none; overflow-y: auto; flex: 1; }
+        .user-item { padding: 15px; border-bottom: 1px solid #34495e; cursor: pointer; display: flex; justify-content: space-between; align-items: center; font-size: 15px; }
+        .user-item:hover, .user-item.active { background: #34495e; }
+        .badge { background: #e74c3c; color: white; border-radius: 50%; padding: 2px 7px; font-size: 12px; display: none; }
+
+        .chat-area { width: 68%; display: flex; flex-direction: column; background: #e5ddd5; }
+        .chat-header { padding: 15px; background: #0088cc; color: white; font-weight: bold; font-size: 16px; }
+        #messages { flex: 1; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+        .msg { max-width: 75%; padding: 10px 14px; border-radius: 10px; font-size: 15px; word-wrap: break-word; }
+        .msg.sent { background: #dcf8c6; align-self: flex-end; }
+        .msg.received { background: white; align-self: flex-start; }
+
+        .input-area { display: flex; padding: 10px; background: #f0f0f0; }
+        #msg-input { flex: 1; padding: 10px 15px; border: 1px solid #ccc; border-radius: 20px; outline: none; font-size: 15px; }
+        #send-btn { margin-left: 8px; padding: 10px 18px; background: #0088cc; color: white; border: none; border-radius: 20px; cursor: pointer; font-weight: bold; }
+        #send-btn:disabled { background: #999; cursor: not-allowed; }
+    </style>
+</head>
+<body>
+
+    <div id="login-screen">
+        <h2>SMS Chatga kirish</h2>
+        <input type="text" id="username-input" placeholder="Ismingizni yozing..." autocomplete="off">
+        <button onclick="joinChat()">Kirish</button>
+    </div>
+
+    <div id="chat-screen">
+        <div class="sidebar">
+            <div class="sidebar-header">Onlayn odamlar</div>
+            <ul id="users-list"></ul>
+        </div>
+        <div class="chat-area">
+            <div class="chat-header" id="chat-with">Yozishish uchun chapdan odam tanlang</div>
+            <div id="messages"></div>
+            <div class="input-area">
+                <input type="text" id="msg-input" placeholder="SMS yozing..." disabled onkeypress="handleEnter(event)">
+                <button id="send-btn" onclick="sendMessage()" disabled>Yuborish</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        let myName = '';
+        let selectedUserId = null;
+        const chatHistory = {};
+
+        function joinChat() {
+            const input = document.getElementById('username-input');
+            if (input.value.trim() !== '') {
+                myName = input.value.trim();
+                socket.emit('join', myName);
+                document.getElementById('login-screen').style.display = 'none';
+                document.getElementById('chat-screen').style.display = 'flex';
+            }
+        }
+
+        socket.on('userList', (users) => {
+            const list = document.getElementById('users-list');
+            list.innerHTML = '';
+            users.forEach(user => {
+                if (user.id !== socket.id) {
+                    const li = document.createElement('li');
+                    li.className = 'user-item' + (user.id === selectedUserId ? ' active' : '');
+                    li.id = 'user-' + user.id;
+                    li.innerHTML = `<span>${user.name}</span> <span class="badge" id="badge-${user.id}">!</span>`;
+                    li.onclick = () => selectUser(user.id, user.name);
+                    list.appendChild(li);
+                }
+            });
+        });
+
+        function selectUser(id, name) {
+            selectedUserId = id;
+            document.getElementById('chat-with').innerText = name + ' bilan suhbat';
+            document.getElementById('msg-input').disabled = false;
+            document.getElementById('send-btn').disabled = false;
+            
+            document.querySelectorAll('.user-item').forEach(el => el.classList.remove('active'));
+            const activeEl = document.getElementById('user-' + id);
+            if (activeEl) activeEl.classList.add('active');
+            
+            const badge = document.getElementById('badge-' + id);
+            if (badge) badge.style.display = 'none';
+
+            renderMessages();
+        }
+
+        function sendMessage() {
+            const input = document.getElementById('msg-input');
+            const text = input.value.trim();
+            if (text && selectedUserId) {
+                socket.emit('privateMessage', { to: selectedUserId, message: text });
+                
+                if (!chatHistory[selectedUserId]) chatHistory[selectedUserId] = [];
+                chatHistory[selectedUserId].push({ type: 'sent', text: text });
+                
+                input.value = '';
+                renderMessages();
+            }
+        }
+
+        socket.on('newMessage', ({ fromId, fromName, message }) => {
+            if (!chatHistory[fromId]) chatHistory[fromId] = [];
+            chatHistory[fromId].push({ type: 'received', text: message });
+
+            if (selectedUserId === fromId) {
+                renderMessages();
+            } else {
+                const badge = document.getElementById('badge-' + fromId);
+                if (badge) badge.style.display = 'inline-block';
+            }
+        });
+
+        function renderMessages() {
+            const msgBox = document.getElementById('messages');
+            msgBox.innerHTML = '';
+            const msgs = chatHistory[selectedUserId] || [];
+            msgs.forEach(m => {
+                const div = document.createElement('div');
+                div.className = 'msg ' + m.type;
+                div.innerText = m.text;
+                msgBox.appendChild(div);
+            });
+            msgBox.scrollTop = msgBox.scrollHeight;
+        }
+
+        function handleEnter(e) {
+            if (e.key === 'Enter') sendMessage();
+        }
+    </script>
+</body>
+</html>
